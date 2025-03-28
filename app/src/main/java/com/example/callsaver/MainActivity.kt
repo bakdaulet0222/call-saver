@@ -61,19 +61,53 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+
+            // Логируем результат запроса разрешений
+            permissions.forEach { (perm, granted) ->
+                Log.d(
+                    "Permissions",
+                    "Разрешение $perm: ${if (granted) "получено" else "отклонено"}"
+                )
+            }
+
             if (permissions[Manifest.permission.READ_PHONE_STATE] == true) {
-                // Разрешение на чтение состояния телефона получено
                 initializePhoneStateListener()
             } else {
-                Log.e("CallService", "Разрешение на доступ к состоянию звонков не предоставлено")
+                Toast.makeText(this, "Нет доступа к состоянию телефона!", Toast.LENGTH_LONG).show()
+            }
+
+            if (permissions[Manifest.permission.WRITE_CONTACTS] == true) {
+                Log.d("CallService", "Разрешение на запись контактов получено!")
+                Toast.makeText(this, "Доступ к контактам разрешен!", Toast.LENGTH_LONG).show()
+                val sharedPrefs = getSharedPreferences("call_logs", Context.MODE_PRIVATE)
+                val pendingNumber = sharedPrefs.getString("pending_number", null)
+
+                if (!pendingNumber.isNullOrBlank()) {
+                    saveContact(this, pendingNumber)
+                    sharedPrefs.edit().remove("pending_number").apply()
+                }
+            } else {
+                Toast.makeText(this, "Нет доступа к контактам!", Toast.LENGTH_LONG).show()
             }
 
             if (permissions[Manifest.permission.READ_CALL_LOG] == true) {
-                // Разрешение на чтение истории звонков получено
-                // Ваш код для работы с журналом звонков, если нужно
+                Log.d("CallService", "Разрешение на чтение истории звонков получено")
+            } else {
+                Toast.makeText(this, "Нет доступа к журналу звонков!", Toast.LENGTH_LONG).show()
+            }
+
+            if (permissions[Manifest.permission.RECEIVE_BOOT_COMPLETED] != true) {
+                Toast.makeText(
+                    this,
+                    "Разрешение RECEIVE_BOOT_COMPLETED не предоставлено!",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+
+            if (permissions[Manifest.permission.FOREGROUND_SERVICE] != true) {
+                Toast.makeText(this, "Нет разрешения на фоновый сервис!", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -85,11 +119,41 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermissions(this)
         // Запуск фонового сервиса
         startCallService()
+        startWhatsappService()
         createNotificationChannel()
         setContent {
             CallLoggerApp(context = this)
         }
         checkAndRequestBatteryOptimization(this)
+    }
+
+    private fun startWhatsappService() {
+        if (!isNotificationListenerEnabled()) {
+            requestNotificationPermission()
+            return
+        }
+
+        val serviceIntent = Intent(this, WhatsAppNotificationService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    }
+
+    // Проверяет, включен ли Notification Listener Service
+     fun isNotificationListenerEnabled(): Boolean {
+        val contentResolver = applicationContext.contentResolver
+        val enabledNotificationListeners = android.provider.Settings.Secure.getString(
+            contentResolver, "enabled_notification_listeners"
+        ) ?: return false
+        return enabledNotificationListeners.contains(applicationContext.packageName)
+    }
+
+    // Запрашивает у пользователя включение доступа к уведомлениям
+    fun requestNotificationPermission() {
+        val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+        startActivity(intent)
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -171,10 +235,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun checkAndRequestPermissions(activity: Activity) {
+    val permissions = arrayOf(
+        Manifest.permission.READ_CONTACTS,
+        Manifest.permission.WRITE_CONTACTS
+    )
+
+    val missingPermissions = permissions.filter {
+        ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
+    }
+
+    if (missingPermissions.isNotEmpty()) {
+        ActivityCompat.requestPermissions(activity, missingPermissions.toTypedArray(), 1001)
+    }
+}
+
 @Composable
 fun CallLoggerApp(context: Context) {
     val sharedPreferences = context.getSharedPreferences("call_logs", Context.MODE_PRIVATE)
-    var phoneNumber by remember { mutableStateOf("") }
     var shopPhoneNumber by remember {
         mutableStateOf(
             sharedPreferences.getString(
@@ -194,7 +272,7 @@ fun CallLoggerApp(context: Context) {
     fun saveShopPhoneNumber(phone: String) {
         sharedPreferences.edit().putString("shop_phone_number", phone).apply()
         shopPhoneNumber = phone // Обновляем номер в UI
-        Toast.makeText(context, "Номер успешно сохранён!", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Номер успешно сохранён!", Toast.LENGTH_LONG).show()
     }
 
     LaunchedEffect(Unit) {
@@ -204,6 +282,72 @@ fun CallLoggerApp(context: Context) {
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.padding(16.dp)) {
+                // Блок проверки оптимизации батареи
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Убедитесь, что отключена оптимизация батареи.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Button(
+                        onClick = { checkAndRequestBatteryOptimization(context as Activity) },
+                        modifier = Modifier.padding(start = 8.dp)
+                    ) {
+                        Text("Проверить")
+                    }
+                }
+
+                // Блок проверки разрешений
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Проверьте, что у приложения есть доступ к контактам.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Button(
+                        onClick = { checkAndRequestPermissions(context as Activity) },
+                        modifier = Modifier.padding(start = 8.dp)
+                    ) {
+                        Text("Запросить")
+                    }
+                }
+
+                // Блок проверки ватсап
+//                Row(
+//                    modifier = Modifier
+//                        .fillMaxWidth()
+//                        .padding(bottom = 8.dp),
+//                    horizontalArrangement = Arrangement.SpaceBetween
+//                ) {
+//                    Text(
+//                        text = "Проверка доступа к уведомлении whatsapp.",
+//                        style = MaterialTheme.typography.bodyMedium,
+//                        modifier = Modifier.weight(1f)
+//                    )
+//
+//                    Button(
+//                        onClick = {  if (!isNotificationListenerEnabled()) {
+//                            requestNotificationPermission()
+//                            return
+//                        } },
+//                        modifier = Modifier.padding(start = 8.dp)
+//                    ) {
+//                        Text("Проверить")
+//                    }
+//                }
+
                 Text(
                     text = "Журнал вызовов",
                     style = MaterialTheme.typography.headlineMedium,
@@ -228,9 +372,7 @@ fun CallLoggerApp(context: Context) {
                 // Поле для ввода номера телефона магазина
                 TextField(
                     value = shopPhoneNumber,
-                    onValueChange = { newValue ->
-                        shopPhoneNumber = newValue
-                    },
+                    onValueChange = { newValue -> shopPhoneNumber = newValue },
                     label = { Text("Номер телефона магазина") },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -238,9 +380,7 @@ fun CallLoggerApp(context: Context) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
-                    onClick = {
-                        saveShopPhoneNumber(shopPhoneNumber) // Сохраняем номер и показываем `Toast`
-                    },
+                    onClick = { saveShopPhoneNumber(shopPhoneNumber) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Сохранить номер магазина")
@@ -272,6 +412,7 @@ fun CallLoggerApp(context: Context) {
             }
         }
     }
+
 }
 
 fun checkAndRequestBatteryOptimization(activity: Activity) {
@@ -291,6 +432,8 @@ fun checkAndRequestBatteryOptimization(activity: Activity) {
             }
             .setNegativeButton("Отмена", null)
             .show()
+    } else {
+        Toast.makeText(activity, "Оптимизация батареи отключена!", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -346,6 +489,9 @@ fun saveContact(context: Context, phoneNumber: String) {
     // Создаём новый контакт
     val contactOperations = ArrayList<ContentProviderOperation>()
 
+    val lastFourDigits = if (phoneNumber.length >= 4) phoneNumber.takeLast(4) else phoneNumber
+    val displayName = "Клиент $clientIndex $lastFourDigits"
+
     contactOperations.add(
         ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
             .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, null)
@@ -360,10 +506,7 @@ fun saveContact(context: Context, phoneNumber: String) {
                 ContactsContract.Data.MIMETYPE,
                 ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE
             )
-            .withValue(
-                ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME,
-                "Клиент $clientIndex"
-            )
+            .withValue(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, displayName)
             .build()
     )
 

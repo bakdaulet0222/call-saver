@@ -9,10 +9,14 @@ import android.os.IBinder
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
 import android.util.Log
+import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.work.PeriodicWorkRequest
+import androidx.work.WorkManager
 import com.example.callsaver.MainActivity.Companion.CHANNEL_ID
 import com.example.callsaver.ui.CallListener
+import java.util.concurrent.TimeUnit
 
 class CallService : Service() {
     private lateinit var telephonyManager: TelephonyManager
@@ -38,12 +42,19 @@ class CallService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d("CallService", "Сервис уничтожен, перезапускаем...")
-
+        Toast.makeText(baseContext, "Сервис уничтожен, перезапускаем...", Toast.LENGTH_LONG).show()
         // Остановить слушателя
         telephonyManager.listen(callListener, PhoneStateListener.LISTEN_NONE)
 
         // Перезапуск сервиса
         restartService()
+        restartServiceWithAlarm()
+        val workRequest = PeriodicWorkRequest.Builder(
+            RestartServiceWorker::class.java,
+            15, TimeUnit.MINUTES // Интервал перезапуска
+        ).build()
+
+        WorkManager.getInstance(baseContext).enqueue(workRequest)
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
@@ -75,6 +86,18 @@ class CallService : Service() {
     private fun restartService() {
         val restartIntent = Intent(this, ServiceRestartReceiver::class.java)
         sendBroadcast(restartIntent)
+    }
+
+    private fun restartServiceWithAlarm() {
+        val intent = Intent(this, CallService::class.java)
+        val pendingIntent = PendingIntent.getService(
+            this, 1, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val triggerTime = System.currentTimeMillis() + 10 * 1000 // Через 10 секунд
+
+        alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
