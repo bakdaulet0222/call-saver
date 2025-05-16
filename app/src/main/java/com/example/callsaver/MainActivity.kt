@@ -15,7 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -61,6 +60,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
 
@@ -119,41 +119,11 @@ class MainActivity : ComponentActivity() {
         checkAndRequestPermissions(this)
         // Запуск фонового сервиса
         startCallService()
-        startWhatsappService()
         createNotificationChannel()
         setContent {
             CallLoggerApp(context = this)
         }
         checkAndRequestBatteryOptimization(this)
-    }
-
-    private fun startWhatsappService() {
-        if (!isNotificationListenerEnabled()) {
-            requestNotificationPermission()
-            return
-        }
-
-        val serviceIntent = Intent(this, WhatsAppNotificationService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-    }
-
-    // Проверяет, включен ли Notification Listener Service
-     fun isNotificationListenerEnabled(): Boolean {
-        val contentResolver = applicationContext.contentResolver
-        val enabledNotificationListeners = android.provider.Settings.Secure.getString(
-            contentResolver, "enabled_notification_listeners"
-        ) ?: return false
-        return enabledNotificationListeners.contains(applicationContext.packageName)
-    }
-
-    // Запрашивает у пользователя включение доступа к уведомлениям
-    fun requestNotificationPermission() {
-        val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
-        startActivity(intent)
     }
 
     private fun requestPermissionsIfNeeded() {
